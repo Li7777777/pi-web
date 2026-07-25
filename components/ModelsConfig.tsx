@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import type { ModelCatalogEntry } from "@/lib/model-catalog";
+import type { DiscoveredModel } from "@/lib/model-discovery";
 // Color icons (have their own fill colors — no background needed)
 import AnthropicIcon from "@lobehub/icons/es/Anthropic/components/Mono";
 import OpenAIIcon from "@lobehub/icons/es/OpenAI/components/Mono";
@@ -142,6 +144,18 @@ type ModelTestState =
   | { phase: "testing" }
   | { phase: "success"; latencyMs?: number; status?: number; responseText?: string }
   | { phase: "error"; message: string; latencyMs?: number; status?: number };
+
+type ModelDiscoveryState =
+  | { phase: "idle" }
+  | { phase: "loading" }
+  | { phase: "success"; models: DiscoveredModel[]; endpoint: string }
+  | { phase: "error"; message: string };
+
+type ModelCatalogState =
+  | { phase: "idle" }
+  | { phase: "loading" }
+  | { phase: "success"; models: ModelCatalogEntry[] }
+  | { phase: "error"; message: string };
 
 type Selection =
   | { type: "provider"; name: string }
@@ -286,11 +300,15 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 
 // ── Provider detail ───────────────────────────────────────────────────────────
 
-function ProviderDetail({ name, provider, onChange, onRename, onDelete }: {
+function ProviderDetail({ name, provider, onChange, onRename, onDelete, onAddModels }: {
   name: string; provider: ProviderEntry;
   onChange: (p: ProviderEntry) => void; onRename: (n: string) => void; onDelete: () => void;
+  onAddModels: (models: DiscoveredModel[]) => void;
 }) {
   const [editingName, setEditingName] = useState(name);
+  const [discoveryState, setDiscoveryState] = useState<ModelDiscoveryState>({ phase: "idle" });
+  const [discoveryQuery, setDiscoveryQuery] = useState("");
+  const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
   useEffect(() => setEditingName(name), [name]);
   const set = <K extends keyof ProviderEntry>(k: K, v: ProviderEntry[K]) => onChange({ ...provider, [k]: v });
 
@@ -298,6 +316,60 @@ function ProviderDetail({ name, provider, onChange, onRename, onDelete }: {
     if (!provider.api) onChange({ ...provider, api: "openai-completions" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [provider.api]);
+
+  useEffect(() => {
+    setDiscoveryState({ phase: "idle" });
+    setDiscoveryQuery("");
+    setSelectedModelIds([]);
+  }, [name, provider.baseUrl, provider.api, provider.apiKey]);
+
+  const handleDiscoverModels = useCallback(async () => {
+    if (!provider.baseUrl?.trim() || discoveryState.phase === "loading") return;
+    setDiscoveryState({ phase: "loading" });
+    setSelectedModelIds([]);
+    try {
+      const res = await fetch("/api/models-config/discover", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ providerName: name, provider: { ...provider, models: undefined } }),
+      });
+      const data = await res.json() as { models?: DiscoveredModel[]; endpoint?: string; error?: string };
+      if (!res.ok || data.error || !data.models) {
+        setDiscoveryState({ phase: "error", message: data.error ?? `HTTP ${res.status}` });
+        return;
+      }
+      setDiscoveryState({ phase: "success", models: data.models, endpoint: data.endpoint ?? provider.baseUrl });
+    } catch (error) {
+      setDiscoveryState({ phase: "error", message: error instanceof Error ? error.message : String(error) });
+    }
+  }, [discoveryState.phase, name, provider]);
+
+  const existingModelIds = new Set((provider.models ?? []).map((model) => model.id));
+  const discoveredModels = discoveryState.phase === "success" ? discoveryState.models : [];
+  const normalizedDiscoveryQuery = discoveryQuery.trim().toLocaleLowerCase();
+  const filteredDiscoveredModels = discoveredModels.filter((model) => !normalizedDiscoveryQuery
+    || model.id.toLocaleLowerCase().includes(normalizedDiscoveryQuery)
+    || model.name?.toLocaleLowerCase().includes(normalizedDiscoveryQuery));
+  const shownDiscoveredModels = filteredDiscoveredModels.slice(0, 300);
+  const selectableShownIds = shownDiscoveredModels
+    .filter((model) => !existingModelIds.has(model.id))
+    .map((model) => model.id);
+  const selectedCount = selectedModelIds.filter((id) => !existingModelIds.has(id)).length;
+
+  const toggleDiscoveredModel = (id: string) => {
+    setSelectedModelIds((current) => current.includes(id)
+      ? current.filter((entry) => entry !== id)
+      : [...current, id]);
+  };
+
+  const addSelectedModels = () => {
+    if (discoveryState.phase !== "success") return;
+    const selected = new Set(selectedModelIds);
+    const additions = discoveryState.models.filter((model) => selected.has(model.id) && !existingModelIds.has(model.id));
+    if (additions.length === 0) return;
+    onAddModels(additions);
+    setSelectedModelIds([]);
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -335,6 +407,107 @@ function ProviderDetail({ name, provider, onChange, onRename, onDelete }: {
       <Field label="API">
         <Select value={provider.api ?? "openai-completions"} onChange={(v) => set("api", v)} options={API_OPTIONS} required />
       </Field>
+
+      <div style={{ borderTop: "1px solid var(--border)", paddingTop: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <div>
+            <SectionTitle>Upstream models</SectionTitle>
+            <div style={{ marginTop: 3, fontSize: 11, color: "var(--text-dim)" }}>Fetch the provider model list, then select the models to add.</div>
+          </div>
+          <button
+            onClick={handleDiscoverModels}
+            disabled={!provider.baseUrl?.trim() || discoveryState.phase === "loading"}
+            style={{
+              height: 28, padding: "0 10px", border: "1px solid var(--border)", borderRadius: 5,
+              background: "var(--bg-panel)", color: !provider.baseUrl?.trim() || discoveryState.phase === "loading" ? "var(--text-dim)" : "var(--text-muted)",
+              cursor: !provider.baseUrl?.trim() || discoveryState.phase === "loading" ? "not-allowed" : "pointer", fontSize: 11,
+            }}
+          >
+            {discoveryState.phase === "loading" ? "Fetching…" : "Fetch models"}
+          </button>
+        </div>
+
+        {discoveryState.phase === "error" && (
+          <div style={{ padding: "7px 9px", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 5, color: "#ef4444", fontSize: 11, lineHeight: 1.4 }}>
+            {discoveryState.message}
+          </div>
+        )}
+
+        {discoveryState.phase === "success" && (
+          <>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              <input
+                value={discoveryQuery}
+                onChange={(event) => setDiscoveryQuery(event.target.value)}
+                placeholder={`Filter ${discoveryState.models.length} models…`}
+                aria-label="Filter upstream models"
+                style={{ ...inputStyle, flex: "1 1 160px", minWidth: 0 }}
+              />
+              <button
+                onClick={() => setSelectedModelIds((current) => Array.from(new Set([...current, ...selectableShownIds])))}
+                disabled={selectableShownIds.length === 0}
+                style={{ height: 28, padding: "0 8px", border: "1px solid var(--border)", borderRadius: 5, background: "none", color: "var(--text-muted)", cursor: selectableShownIds.length ? "pointer" : "not-allowed", fontSize: 10, whiteSpace: "nowrap" }}
+              >
+                Select shown
+              </button>
+              <button
+                onClick={() => setSelectedModelIds([])}
+                disabled={selectedModelIds.length === 0}
+                style={{ height: 28, padding: "0 8px", border: "1px solid var(--border)", borderRadius: 5, background: "none", color: "var(--text-muted)", cursor: selectedModelIds.length ? "pointer" : "not-allowed", fontSize: 10 }}
+              >
+                Clear
+              </button>
+            </div>
+
+            <div style={{ maxHeight: 220, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 6, background: "var(--bg-panel)" }}>
+              {shownDiscoveredModels.length === 0 ? (
+                <div style={{ padding: 12, color: "var(--text-dim)", fontSize: 11 }}>No matching models.</div>
+              ) : shownDiscoveredModels.map((model, index) => {
+                const alreadyAdded = existingModelIds.has(model.id);
+                const checked = selectedModelIds.includes(model.id);
+                return (
+                  <label
+                    key={model.id}
+                    style={{
+                      minHeight: 36, padding: "6px 9px", display: "flex", alignItems: "center", gap: 8,
+                      borderTop: index === 0 ? "none" : "1px solid var(--border)", cursor: alreadyAdded ? "default" : "pointer",
+                      opacity: alreadyAdded ? 0.65 : 1,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked || alreadyAdded}
+                      disabled={alreadyAdded}
+                      onChange={() => toggleDiscoveredModel(model.id)}
+                      style={{ width: 13, height: 13, accentColor: "var(--accent)", flexShrink: 0 }}
+                    />
+                    <span style={{ minWidth: 0, flex: 1 }}>
+                      <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text)", fontSize: 11 }}>{model.name ?? model.id}</span>
+                      {model.name && <code style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text-dim)", fontSize: 10, fontFamily: "var(--font-mono)" }}>{model.id}</code>}
+                    </span>
+                    {alreadyAdded && <span style={{ color: "var(--text-dim)", fontSize: 10 }}>added</span>}
+                  </label>
+                );
+              })}
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+              <span title={discoveryState.endpoint} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text-dim)", fontSize: 10 }}>
+                {filteredDiscoveredModels.length > shownDiscoveredModels.length
+                  ? `Showing first ${shownDiscoveredModels.length} of ${filteredDiscoveredModels.length}`
+                  : `${discoveryState.models.length} models fetched`}
+              </span>
+              <button
+                onClick={addSelectedModels}
+                disabled={selectedCount === 0}
+                style={{ height: 28, padding: "0 11px", border: "none", borderRadius: 5, background: selectedCount ? "var(--accent)" : "var(--bg-panel)", color: selectedCount ? "#fff" : "var(--text-dim)", cursor: selectedCount ? "pointer" : "not-allowed", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}
+              >
+                Add selected{selectedCount ? ` (${selectedCount})` : ""}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -516,6 +689,9 @@ function ModelDetail({
   onDelete: () => void;
 }) {
   const [testState, setTestState] = useState<ModelTestState>({ phase: "idle" });
+  const [catalogQuery, setCatalogQuery] = useState(model.id);
+  const [catalogState, setCatalogState] = useState<ModelCatalogState>({ phase: "idle" });
+  const [selectedCatalogKey, setSelectedCatalogKey] = useState("");
   const set = <K extends keyof ModelEntry>(k: K, v: ModelEntry[K]) => onChange({ ...model, [k]: v });
   const costVal = (k: keyof NonNullable<ModelEntry["cost"]>) => model.cost?.[k] !== undefined ? String(model.cost[k]) : "";
   const setCost = (k: keyof NonNullable<ModelEntry["cost"]>, v: string) => {
@@ -538,6 +714,12 @@ function ModelDetail({
   useEffect(() => {
     setTestState({ phase: "idle" });
   }, [providerName, provider.baseUrl, provider.api, provider.apiKey, model.id, model.api]);
+
+  useEffect(() => {
+    setCatalogQuery(model.id);
+    setCatalogState({ phase: "idle" });
+    setSelectedCatalogKey("");
+  }, [providerName, model.id]);
 
   const handleTest = useCallback(async () => {
     if (!model.id.trim() || testState.phase === "testing") return;
@@ -574,6 +756,41 @@ function ModelDetail({
       setTestState({ phase: "error", message: e instanceof Error ? e.message : String(e) });
     }
   }, [model, provider, providerName, testState.phase]);
+
+  const handleCatalogSearch = useCallback(async () => {
+    const query = catalogQuery.trim();
+    if (!query || catalogState.phase === "loading") return;
+    setCatalogState({ phase: "loading" });
+    setSelectedCatalogKey("");
+    try {
+      const params = new URLSearchParams({ q: query, provider: providerName, limit: "50" });
+      const res = await fetch(`/api/models-config/catalog?${params}`);
+      const data = await res.json() as { models?: ModelCatalogEntry[]; error?: string };
+      if (!res.ok || data.error || !data.models) {
+        setCatalogState({ phase: "error", message: data.error ?? `HTTP ${res.status}` });
+        return;
+      }
+      setCatalogState({ phase: "success", models: data.models });
+      setSelectedCatalogKey(data.models[0]?.key ?? "");
+    } catch (error) {
+      setCatalogState({ phase: "error", message: error instanceof Error ? error.message : String(error) });
+    }
+  }, [catalogQuery, catalogState.phase, providerName]);
+
+  const applyCatalogPrice = () => {
+    if (catalogState.phase !== "success") return;
+    const preset = catalogState.models.find((entry) => entry.key === selectedCatalogKey);
+    if (!preset) return;
+    onChange({
+      ...model,
+      cost: {
+        input: preset.cost.input,
+        output: preset.cost.output,
+        cacheRead: preset.cost.cacheRead,
+        cacheWrite: preset.cost.cacheWrite,
+      },
+    });
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -691,7 +908,57 @@ function ModelDetail({
       </div>
 
       <div>
-        <SectionTitle>Cost (per million tokens)</SectionTitle>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <SectionTitle>Cost (per million tokens)</SectionTitle>
+          <a href="https://github.com/anomalyco/models.dev" target="_blank" rel="noreferrer" style={{ color: "var(--text-dim)", fontSize: 10, textDecoration: "none" }}>source: models.dev ↗</a>
+        </div>
+        <div style={{ marginTop: 8, display: "flex", gap: 6, alignItems: "center" }}>
+          <input
+            value={catalogQuery}
+            onChange={(event) => setCatalogQuery(event.target.value)}
+            onKeyDown={(event) => { if (event.key === "Enter") void handleCatalogSearch(); }}
+            placeholder="Search model ID or name"
+            aria-label="Search models.dev pricing"
+            style={{ ...inputStyle, flex: 1, minWidth: 0 }}
+          />
+          <button
+            onClick={handleCatalogSearch}
+            disabled={!catalogQuery.trim() || catalogState.phase === "loading"}
+            style={{ height: 28, padding: "0 10px", border: "1px solid var(--border)", borderRadius: 5, background: "var(--bg-panel)", color: !catalogQuery.trim() || catalogState.phase === "loading" ? "var(--text-dim)" : "var(--text-muted)", cursor: !catalogQuery.trim() || catalogState.phase === "loading" ? "not-allowed" : "pointer", fontSize: 11, whiteSpace: "nowrap" }}
+          >
+            {catalogState.phase === "loading" ? "Searching…" : "Find price"}
+          </button>
+        </div>
+        {catalogState.phase === "error" && (
+          <div style={{ marginTop: 6, color: "#ef4444", fontSize: 10 }}>{catalogState.message}</div>
+        )}
+        {catalogState.phase === "success" && catalogState.models.length === 0 && (
+          <div style={{ marginTop: 6, color: "var(--text-dim)", fontSize: 10 }}>No pricing presets matched this search.</div>
+        )}
+        {catalogState.phase === "success" && catalogState.models.length > 0 && (
+          <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}>
+            <select
+              value={selectedCatalogKey}
+              onChange={(event) => setSelectedCatalogKey(event.target.value)}
+              aria-label="models.dev pricing preset"
+              style={{ ...inputStyle, flex: 1, minWidth: 0 }}
+            >
+              {catalogState.models.map((entry) => (
+                <option key={entry.key} value={entry.key}>
+                  {entry.providerName} · {entry.name} · in ${entry.cost.input ?? "—"} / out ${entry.cost.output ?? "—"}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={applyCatalogPrice}
+              disabled={!selectedCatalogKey}
+              style={{ height: 28, padding: "0 10px", border: "none", borderRadius: 5, background: selectedCatalogKey ? "var(--accent)" : "var(--bg-panel)", color: selectedCatalogKey ? "#fff" : "var(--text-dim)", cursor: selectedCatalogKey ? "pointer" : "not-allowed", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}
+            >
+              Apply
+            </button>
+          </div>
+        )}
+        <div style={{ marginTop: 5, color: "var(--text-dim)", fontSize: 10 }}>Applying a preset fills the fields below; every value remains editable.</div>
         <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
           {(["input", "output", "cacheRead", "cacheWrite"] as const).map((k) => (
             <Field key={k} label={k}>
@@ -1366,6 +1633,20 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
     });
   }, []);
 
+  const addDiscoveredModels = useCallback((providerName: string, discovered: DiscoveredModel[]) => {
+    setConfig((prev) => {
+      const provider = prev.providers?.[providerName] ?? {};
+      const models = [...(provider.models ?? [])];
+      const existingIds = new Set(models.map((model) => model.id));
+      for (const discoveredModel of discovered) {
+        if (existingIds.has(discoveredModel.id)) continue;
+        existingIds.add(discoveredModel.id);
+        models.push({ id: discoveredModel.id, name: discoveredModel.name });
+      }
+      return { ...prev, providers: { ...(prev.providers ?? {}), [providerName]: { ...provider, models } } };
+    });
+  }, []);
+
   const updateModel = useCallback((providerName: string, index: number, m: ModelEntry) => {
     setConfig((prev) => {
       const provider = prev.providers?.[providerName] ?? {};
@@ -1433,6 +1714,7 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
           onChange={(p) => updateProvider(selection.name, p)}
           onRename={(n) => renameProvider(selection.name, n)}
           onDelete={() => deleteProvider(selection.name)}
+          onAddModels={(models) => addDiscoveredModels(selection.name, models)}
         />
       );
     }
