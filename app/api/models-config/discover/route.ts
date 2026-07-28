@@ -1,8 +1,5 @@
 import { NextResponse } from "next/server";
-import { mkdtempSync, rmSync, writeFileSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { resolveModelDiscoveryAuth } from "@/lib/model-discovery-auth";
 import { buildModelsListUrl, parseDiscoveredModels } from "@/lib/model-discovery";
 
 export const dynamic = "force-dynamic";
@@ -11,11 +8,6 @@ const DISCOVERY_TIMEOUT_MS = 20_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function stringRecord(value: unknown): Record<string, string> {
-  if (!isRecord(value)) return {};
-  return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
 }
 
 function hasHeader(headers: Headers, name: string): boolean {
@@ -38,47 +30,6 @@ function buildHeaders(api: string, apiKey: string | undefined, configured: Recor
   return headers;
 }
 
-async function resolveAuth(
-  providerName: string,
-  provider: Record<string, unknown>,
-): Promise<{ apiKey?: string; headers: Record<string, string> }> {
-  let tempDir: string | undefined;
-  try {
-    tempDir = mkdtempSync(join(tmpdir(), "pi-web-model-discovery-"));
-    const modelsPath = join(tempDir, "models.json");
-    const discoveryModelId = "__pi_web_model_discovery__";
-    writeFileSync(modelsPath, JSON.stringify({
-      providers: {
-        [providerName]: {
-          ...provider,
-          models: [{ id: discoveryModelId }],
-        },
-      },
-    }, null, 2), "utf8");
-
-    const modelRuntime = await ModelRuntime.create({ modelsPath });
-    const loadError = modelRuntime.getError();
-    if (loadError) throw new Error(loadError);
-    const model = modelRuntime.getModel(providerName, discoveryModelId);
-    if (!model) throw new Error(`Unable to load provider "${providerName}"`);
-
-    try {
-      const resolved = await modelRuntime.getAuth(model);
-      return {
-        apiKey: resolved?.auth.apiKey,
-        headers: resolved?.auth.headers
-          ? stringRecord(resolved.auth.headers)
-          : stringRecord(provider.headers),
-      };
-    } catch (error) {
-      if (typeof provider.apiKey === "string" && provider.apiKey.trim()) throw error;
-      return { headers: stringRecord(provider.headers) };
-    }
-  } finally {
-    if (tempDir) rmSync(tempDir, { recursive: true, force: true });
-  }
-}
-
 export async function POST(req: Request) {
   try {
     const body = await req.json() as { providerName?: unknown; provider?: unknown };
@@ -99,7 +50,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Base URL is invalid" }, { status: 400 });
     }
 
-    const auth = await resolveAuth(providerName, body.provider);
+    const auth = await resolveModelDiscoveryAuth(providerName, body.provider);
     if (typeof body.provider.apiKey === "string" && body.provider.apiKey.trim() && !auth.apiKey) {
       return NextResponse.json({ error: `No API key found for "${providerName}"` }, { status: 400 });
     }

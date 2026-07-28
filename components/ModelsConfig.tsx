@@ -313,6 +313,7 @@ function ProviderDetail({ name, provider, onChange, onRename, onDelete, onAddMod
   const [discoveryState, setDiscoveryState] = useState<ModelDiscoveryState>({ phase: "idle" });
   const [discoveryQuery, setDiscoveryQuery] = useState("");
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
+  const discoveryRequestIdRef = useRef(0);
   useEffect(() => setEditingName(name), [name]);
   const set = <K extends keyof ProviderEntry>(k: K, v: ProviderEntry[K]) => onChange({ ...provider, [k]: v });
 
@@ -322,6 +323,7 @@ function ProviderDetail({ name, provider, onChange, onRename, onDelete, onAddMod
   }, [provider.api]);
 
   useEffect(() => {
+    discoveryRequestIdRef.current += 1;
     setDiscoveryState({ phase: "idle" });
     setDiscoveryQuery("");
     setSelectedModelIds([]);
@@ -329,6 +331,7 @@ function ProviderDetail({ name, provider, onChange, onRename, onDelete, onAddMod
 
   const handleDiscoverModels = useCallback(async () => {
     if (!provider.baseUrl?.trim() || discoveryState.phase === "loading") return;
+    const requestId = ++discoveryRequestIdRef.current;
     setDiscoveryState({ phase: "loading" });
     setSelectedModelIds([]);
     try {
@@ -338,12 +341,14 @@ function ProviderDetail({ name, provider, onChange, onRename, onDelete, onAddMod
         body: JSON.stringify({ providerName: name, provider: { ...provider, models: undefined } }),
       });
       const data = await res.json() as { models?: DiscoveredModel[]; endpoint?: string; error?: string };
+      if (requestId !== discoveryRequestIdRef.current) return;
       if (!res.ok || data.error || !data.models) {
         setDiscoveryState({ phase: "error", message: data.error ?? `HTTP ${res.status}` });
         return;
       }
       setDiscoveryState({ phase: "success", models: data.models, endpoint: data.endpoint ?? provider.baseUrl });
     } catch (error) {
+      if (requestId !== discoveryRequestIdRef.current) return;
       setDiscoveryState({ phase: "error", message: error instanceof Error ? error.message : String(error) });
     }
   }, [discoveryState.phase, name, provider]);
@@ -415,8 +420,8 @@ function ProviderDetail({ name, provider, onChange, onRename, onDelete, onAddMod
       <div style={{ borderTop: "1px solid var(--border)", paddingTop: 14, display: "flex", flexDirection: "column", gap: 10 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
           <div>
-            <SectionTitle>Upstream models</SectionTitle>
-            <div style={{ marginTop: 3, fontSize: 11, color: "var(--text-dim)" }}>Fetch the provider model list, then select the models to add.</div>
+            <SectionTitle>{t("models.discoveryTitle")}</SectionTitle>
+            <div style={{ marginTop: 3, fontSize: 11, color: "var(--text-dim)" }}>{t("models.discoveryDescription")}</div>
           </div>
           <button
             onClick={handleDiscoverModels}
@@ -427,7 +432,7 @@ function ProviderDetail({ name, provider, onChange, onRename, onDelete, onAddMod
               cursor: !provider.baseUrl?.trim() || discoveryState.phase === "loading" ? "not-allowed" : "pointer", fontSize: 11,
             }}
           >
-            {discoveryState.phase === "loading" ? "Fetching…" : "Fetch models"}
+            {discoveryState.phase === "loading" ? t("models.discoveryFetching") : t("models.discoveryFetch")}
           </button>
         </div>
 
@@ -443,8 +448,8 @@ function ProviderDetail({ name, provider, onChange, onRename, onDelete, onAddMod
               <input
                 value={discoveryQuery}
                 onChange={(event) => setDiscoveryQuery(event.target.value)}
-                placeholder={`Filter ${discoveryState.models.length} models…`}
-                aria-label="Filter upstream models"
+                placeholder={t("models.discoveryFilterPlaceholder", { count: discoveryState.models.length })}
+                aria-label={t("models.discoveryFilter")}
                 style={{ ...inputStyle, flex: "1 1 160px", minWidth: 0 }}
               />
               <button
@@ -452,20 +457,20 @@ function ProviderDetail({ name, provider, onChange, onRename, onDelete, onAddMod
                 disabled={selectableShownIds.length === 0}
                 style={{ height: 28, padding: "0 8px", border: "1px solid var(--border)", borderRadius: 5, background: "none", color: "var(--text-muted)", cursor: selectableShownIds.length ? "pointer" : "not-allowed", fontSize: 10, whiteSpace: "nowrap" }}
               >
-                Select shown
+                {t("models.discoverySelectShown")}
               </button>
               <button
                 onClick={() => setSelectedModelIds([])}
                 disabled={selectedModelIds.length === 0}
                 style={{ height: 28, padding: "0 8px", border: "1px solid var(--border)", borderRadius: 5, background: "none", color: "var(--text-muted)", cursor: selectedModelIds.length ? "pointer" : "not-allowed", fontSize: 10 }}
               >
-                Clear
+                {t("models.discoveryClear")}
               </button>
             </div>
 
             <div style={{ maxHeight: 220, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 6, background: "var(--bg-panel)" }}>
               {shownDiscoveredModels.length === 0 ? (
-                <div style={{ padding: 12, color: "var(--text-dim)", fontSize: 11 }}>No matching models.</div>
+                <div style={{ padding: 12, color: "var(--text-dim)", fontSize: 11 }}>{t("models.discoveryNoMatches")}</div>
               ) : shownDiscoveredModels.map((model, index) => {
                 const alreadyAdded = existingModelIds.has(model.id);
                 const checked = selectedModelIds.includes(model.id);
@@ -489,7 +494,7 @@ function ProviderDetail({ name, provider, onChange, onRename, onDelete, onAddMod
                       <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text)", fontSize: 11 }}>{model.name ?? model.id}</span>
                       {model.name && <code style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text-dim)", fontSize: 10, fontFamily: "var(--font-mono)" }}>{model.id}</code>}
                     </span>
-                    {alreadyAdded && <span style={{ color: "var(--text-dim)", fontSize: 10 }}>added</span>}
+                    {alreadyAdded && <span style={{ color: "var(--text-dim)", fontSize: 10 }}>{t("models.discoveryAdded")}</span>}
                   </label>
                 );
               })}
@@ -498,15 +503,17 @@ function ProviderDetail({ name, provider, onChange, onRename, onDelete, onAddMod
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
               <span title={discoveryState.endpoint} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text-dim)", fontSize: 10 }}>
                 {filteredDiscoveredModels.length > shownDiscoveredModels.length
-                  ? `Showing first ${shownDiscoveredModels.length} of ${filteredDiscoveredModels.length}`
-                  : `${discoveryState.models.length} models fetched`}
+                  ? t("models.discoveryShowing", { shown: shownDiscoveredModels.length, total: filteredDiscoveredModels.length })
+                  : t("models.discoveryFetched", { count: discoveryState.models.length })}
               </span>
               <button
                 onClick={addSelectedModels}
                 disabled={selectedCount === 0}
                 style={{ height: 28, padding: "0 11px", border: "none", borderRadius: 5, background: selectedCount ? "var(--accent)" : "var(--bg-panel)", color: selectedCount ? "#fff" : "var(--text-dim)", cursor: selectedCount ? "pointer" : "not-allowed", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}
               >
-                Add selected{selectedCount ? ` (${selectedCount})` : ""}
+                {selectedCount
+                  ? t("models.discoveryAddSelectedCount", { count: selectedCount })
+                  : t("models.discoveryAddSelected")}
               </button>
             </div>
           </>
@@ -697,6 +704,7 @@ function ModelDetail({
   const [catalogQuery, setCatalogQuery] = useState(model.id);
   const [catalogState, setCatalogState] = useState<ModelCatalogState>({ phase: "idle" });
   const [selectedCatalogKey, setSelectedCatalogKey] = useState("");
+  const catalogRequestIdRef = useRef(0);
   const set = <K extends keyof ModelEntry>(k: K, v: ModelEntry[K]) => onChange({ ...model, [k]: v });
   const costVal = (k: keyof NonNullable<ModelEntry["cost"]>) => model.cost?.[k] !== undefined ? String(model.cost[k]) : "";
   const setCost = (k: keyof NonNullable<ModelEntry["cost"]>, v: string) => {
@@ -721,6 +729,7 @@ function ModelDetail({
   }, [providerName, provider.baseUrl, provider.api, provider.apiKey, model.id, model.api]);
 
   useEffect(() => {
+    catalogRequestIdRef.current += 1;
     setCatalogQuery(model.id);
     setCatalogState({ phase: "idle" });
     setSelectedCatalogKey("");
@@ -765,12 +774,14 @@ function ModelDetail({
   const handleCatalogSearch = useCallback(async () => {
     const query = catalogQuery.trim();
     if (!query || catalogState.phase === "loading") return;
+    const requestId = ++catalogRequestIdRef.current;
     setCatalogState({ phase: "loading" });
     setSelectedCatalogKey("");
     try {
       const params = new URLSearchParams({ q: query, provider: providerName, limit: "50" });
       const res = await fetch(`/api/models-config/catalog?${params}`);
       const data = await res.json() as { models?: ModelCatalogEntry[]; error?: string };
+      if (requestId !== catalogRequestIdRef.current) return;
       if (!res.ok || data.error || !data.models) {
         setCatalogState({ phase: "error", message: data.error ?? `HTTP ${res.status}` });
         return;
@@ -778,9 +789,17 @@ function ModelDetail({
       setCatalogState({ phase: "success", models: data.models });
       setSelectedCatalogKey(data.models[0]?.key ?? "");
     } catch (error) {
+      if (requestId !== catalogRequestIdRef.current) return;
       setCatalogState({ phase: "error", message: error instanceof Error ? error.message : String(error) });
     }
   }, [catalogQuery, catalogState.phase, providerName]);
+
+  const handleCatalogQueryChange = (value: string) => {
+    catalogRequestIdRef.current += 1;
+    setCatalogQuery(value);
+    setCatalogState({ phase: "idle" });
+    setSelectedCatalogKey("");
+  };
 
   const applyCatalogPrice = () => {
     if (catalogState.phase !== "success") return;
@@ -915,15 +934,15 @@ function ModelDetail({
       <div>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
           <SectionTitle>Cost (per million tokens)</SectionTitle>
-          <a href="https://github.com/anomalyco/models.dev" target="_blank" rel="noreferrer" style={{ color: "var(--text-dim)", fontSize: 10, textDecoration: "none" }}>source: models.dev ↗</a>
+          <a href="https://github.com/anomalyco/models.dev" target="_blank" rel="noreferrer" style={{ color: "var(--text-dim)", fontSize: 10, textDecoration: "none" }}>{t("models.catalogSource")}</a>
         </div>
         <div style={{ marginTop: 8, display: "flex", gap: 6, alignItems: "center" }}>
           <input
             value={catalogQuery}
-            onChange={(event) => setCatalogQuery(event.target.value)}
+            onChange={(event) => handleCatalogQueryChange(event.target.value)}
             onKeyDown={(event) => { if (event.key === "Enter") void handleCatalogSearch(); }}
-            placeholder="Search model ID or name"
-            aria-label="Search models.dev pricing"
+            placeholder={t("models.catalogSearchPlaceholder")}
+            aria-label={t("models.catalogSearchLabel")}
             style={{ ...inputStyle, flex: 1, minWidth: 0 }}
           />
           <button
@@ -931,26 +950,31 @@ function ModelDetail({
             disabled={!catalogQuery.trim() || catalogState.phase === "loading"}
             style={{ height: 28, padding: "0 10px", border: "1px solid var(--border)", borderRadius: 5, background: "var(--bg-panel)", color: !catalogQuery.trim() || catalogState.phase === "loading" ? "var(--text-dim)" : "var(--text-muted)", cursor: !catalogQuery.trim() || catalogState.phase === "loading" ? "not-allowed" : "pointer", fontSize: 11, whiteSpace: "nowrap" }}
           >
-            {catalogState.phase === "loading" ? "Searching…" : "Find price"}
+            {catalogState.phase === "loading" ? t("models.catalogSearching") : t("models.catalogFindPrice")}
           </button>
         </div>
         {catalogState.phase === "error" && (
           <div style={{ marginTop: 6, color: "#ef4444", fontSize: 10 }}>{catalogState.message}</div>
         )}
         {catalogState.phase === "success" && catalogState.models.length === 0 && (
-          <div style={{ marginTop: 6, color: "var(--text-dim)", fontSize: 10 }}>No pricing presets matched this search.</div>
+          <div style={{ marginTop: 6, color: "var(--text-dim)", fontSize: 10 }}>{t("models.catalogNoMatches")}</div>
         )}
         {catalogState.phase === "success" && catalogState.models.length > 0 && (
           <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}>
             <select
               value={selectedCatalogKey}
               onChange={(event) => setSelectedCatalogKey(event.target.value)}
-              aria-label="models.dev pricing preset"
+              aria-label={t("models.catalogPresetLabel")}
               style={{ ...inputStyle, flex: 1, minWidth: 0 }}
             >
               {catalogState.models.map((entry) => (
                 <option key={entry.key} value={entry.key}>
-                  {entry.providerName} · {entry.name} · in ${entry.cost.input ?? "—"} / out ${entry.cost.output ?? "—"}
+                  {t("models.catalogOption", {
+                    provider: entry.providerName,
+                    name: entry.name,
+                    input: entry.cost.input ?? "—",
+                    output: entry.cost.output ?? "—",
+                  })}
                 </option>
               ))}
             </select>
@@ -959,11 +983,11 @@ function ModelDetail({
               disabled={!selectedCatalogKey}
               style={{ height: 28, padding: "0 10px", border: "none", borderRadius: 5, background: selectedCatalogKey ? "var(--accent)" : "var(--bg-panel)", color: selectedCatalogKey ? "#fff" : "var(--text-dim)", cursor: selectedCatalogKey ? "pointer" : "not-allowed", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}
             >
-              Apply
+              {t("models.catalogApply")}
             </button>
           </div>
         )}
-        <div style={{ marginTop: 5, color: "var(--text-dim)", fontSize: 10 }}>Applying a preset fills the fields below; every value remains editable.</div>
+        <div style={{ marginTop: 5, color: "var(--text-dim)", fontSize: 10 }}>{t("models.catalogApplyHint")}</div>
         <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
           {(["input", "output", "cacheRead", "cacheWrite"] as const).map((k) => (
             <Field key={k} label={k}>
