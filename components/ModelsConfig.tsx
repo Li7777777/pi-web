@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useI18n } from "@/hooks/useI18n";
-import type { ModelCatalogEntry } from "@/lib/model-catalog";
+import type { ModelCatalogPreset, ModelCatalogRecommendation } from "@/lib/model-catalog";
 import type { DiscoveredModel } from "@/lib/model-discovery";
 // Color icons (have their own fill colors — no background needed)
 import AnthropicIcon from "@lobehub/icons/es/Anthropic/components/Mono";
@@ -155,7 +155,7 @@ type ModelDiscoveryState =
 type ModelCatalogState =
   | { phase: "idle" }
   | { phase: "loading" }
-  | { phase: "success"; models: ModelCatalogEntry[] }
+  | { phase: "success"; recommendation: ModelCatalogRecommendation; appliedCount: number }
   | { phase: "error"; message: string };
 
 type Selection =
@@ -314,6 +314,7 @@ function ProviderDetail({ name, provider, onChange, onRename, onDelete, onAddMod
   const [discoveryQuery, setDiscoveryQuery] = useState("");
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
   const discoveryRequestIdRef = useRef(0);
+  const selectShownRef = useRef<HTMLInputElement>(null);
   useEffect(() => setEditingName(name), [name]);
   const set = <K extends keyof ProviderEntry>(k: K, v: ProviderEntry[K]) => onChange({ ...provider, [k]: v });
 
@@ -364,11 +365,26 @@ function ProviderDetail({ name, provider, onChange, onRename, onDelete, onAddMod
     .filter((model) => !existingModelIds.has(model.id))
     .map((model) => model.id);
   const selectedCount = selectedModelIds.filter((id) => !existingModelIds.has(id)).length;
+  const allShownSelected = selectableShownIds.length > 0
+    && selectableShownIds.every((id) => selectedModelIds.includes(id));
+  const someShownSelected = !allShownSelected
+    && selectableShownIds.some((id) => selectedModelIds.includes(id));
+
+  useEffect(() => {
+    if (selectShownRef.current) selectShownRef.current.indeterminate = someShownSelected;
+  }, [someShownSelected]);
 
   const toggleDiscoveredModel = (id: string) => {
     setSelectedModelIds((current) => current.includes(id)
       ? current.filter((entry) => entry !== id)
       : [...current, id]);
+  };
+
+  const toggleShownModels = () => {
+    const shownIds = new Set(selectableShownIds);
+    setSelectedModelIds((current) => allShownSelected
+      ? current.filter((id) => !shownIds.has(id))
+      : Array.from(new Set([...current, ...selectableShownIds])));
   };
 
   const addSelectedModels = () => {
@@ -418,23 +434,19 @@ function ProviderDetail({ name, provider, onChange, onRename, onDelete, onAddMod
       </Field>
 
       <div style={{ borderTop: "1px solid var(--border)", paddingTop: 14, display: "flex", flexDirection: "column", gap: 10 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-          <div>
-            <SectionTitle>{t("models.discoveryTitle")}</SectionTitle>
-            <div style={{ marginTop: 3, fontSize: 11, color: "var(--text-dim)" }}>{t("models.discoveryDescription")}</div>
-          </div>
+        {discoveryState.phase !== "success" && (
           <button
             onClick={handleDiscoverModels}
             disabled={!provider.baseUrl?.trim() || discoveryState.phase === "loading"}
             style={{
-              height: 28, padding: "0 10px", border: "1px solid var(--border)", borderRadius: 5,
+              alignSelf: "flex-start", height: 30, padding: "0 12px", border: "1px solid var(--border)", borderRadius: 5,
               background: "var(--bg-panel)", color: !provider.baseUrl?.trim() || discoveryState.phase === "loading" ? "var(--text-dim)" : "var(--text-muted)",
               cursor: !provider.baseUrl?.trim() || discoveryState.phase === "loading" ? "not-allowed" : "pointer", fontSize: 11,
             }}
           >
             {discoveryState.phase === "loading" ? t("models.discoveryFetching") : t("models.discoveryFetch")}
           </button>
-        </div>
+        )}
 
         {discoveryState.phase === "error" && (
           <div style={{ padding: "7px 9px", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 5, color: "#ef4444", fontSize: 11, lineHeight: 1.4 }}>
@@ -444,31 +456,33 @@ function ProviderDetail({ name, provider, onChange, onRename, onDelete, onAddMod
 
         {discoveryState.phase === "success" && (
           <>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-              <input
-                value={discoveryQuery}
-                onChange={(event) => setDiscoveryQuery(event.target.value)}
-                placeholder={t("models.discoveryFilterPlaceholder", { count: discoveryState.models.length })}
-                aria-label={t("models.discoveryFilter")}
-                style={{ ...inputStyle, flex: "1 1 160px", minWidth: 0 }}
-              />
-              <button
-                onClick={() => setSelectedModelIds((current) => Array.from(new Set([...current, ...selectableShownIds])))}
-                disabled={selectableShownIds.length === 0}
-                style={{ height: 28, padding: "0 8px", border: "1px solid var(--border)", borderRadius: 5, background: "none", color: "var(--text-muted)", cursor: selectableShownIds.length ? "pointer" : "not-allowed", fontSize: 10, whiteSpace: "nowrap" }}
-              >
-                {t("models.discoverySelectShown")}
-              </button>
-              <button
-                onClick={() => setSelectedModelIds([])}
-                disabled={selectedModelIds.length === 0}
-                style={{ height: 28, padding: "0 8px", border: "1px solid var(--border)", borderRadius: 5, background: "none", color: "var(--text-muted)", cursor: selectedModelIds.length ? "pointer" : "not-allowed", fontSize: 10 }}
-              >
-                {t("models.discoveryClear")}
-              </button>
-            </div>
+            <input
+              value={discoveryQuery}
+              onChange={(event) => setDiscoveryQuery(event.target.value)}
+              placeholder={t("models.discoveryFilterPlaceholder", { count: discoveryState.models.length })}
+              aria-label={t("models.discoveryFilter")}
+              style={{ ...inputStyle, width: "100%", minWidth: 0 }}
+            />
 
             <div style={{ maxHeight: 220, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 6, background: "var(--bg-panel)" }}>
+              <label
+                style={{
+                  minHeight: 32, padding: "5px 9px", display: "flex", alignItems: "center", gap: 8,
+                  position: "sticky", top: 0, zIndex: 1, borderBottom: "1px solid var(--border)",
+                  background: "var(--bg)", cursor: selectableShownIds.length ? "pointer" : "default",
+                  color: "var(--text-muted)", fontSize: 10, fontWeight: 600,
+                }}
+              >
+                <input
+                  ref={selectShownRef}
+                  type="checkbox"
+                  checked={allShownSelected}
+                  disabled={selectableShownIds.length === 0}
+                  onChange={toggleShownModels}
+                  style={{ width: 13, height: 13, accentColor: "var(--accent)", flexShrink: 0 }}
+                />
+                {t("models.discoverySelectShown")}
+              </label>
               {shownDiscoveredModels.length === 0 ? (
                 <div style={{ padding: 12, color: "var(--text-dim)", fontSize: 11 }}>{t("models.discoveryNoMatches")}</div>
               ) : shownDiscoveredModels.map((model, index) => {
@@ -686,6 +700,48 @@ function setDeepseekCompat(model: ModelEntry, enabled: boolean): ModelEntry {
   return { ...model, compat: Object.keys(rest).length ? rest : undefined };
 }
 
+function fillEmptyModelFields(
+  model: ModelEntry,
+  preset: ModelCatalogPreset,
+): { model: ModelEntry; appliedCount: number } {
+  const next = { ...model };
+  let appliedCount = 0;
+  if (!model.name?.trim() && preset.name) {
+    next.name = preset.name;
+    appliedCount += 1;
+  }
+  if (model.reasoning === undefined && preset.reasoning === true) {
+    next.reasoning = true;
+    appliedCount += 1;
+  }
+  if (!model.input?.length && preset.input?.length) {
+    next.input = [...preset.input];
+    appliedCount += 1;
+  }
+  if (model.contextWindow === undefined && preset.contextWindow !== undefined) {
+    next.contextWindow = preset.contextWindow;
+    appliedCount += 1;
+  }
+  if (model.maxTokens === undefined && preset.maxTokens !== undefined) {
+    next.maxTokens = preset.maxTokens;
+    appliedCount += 1;
+  }
+
+  if (preset.cost) {
+    const cost = { ...(model.cost ?? {}) };
+    let costChanged = false;
+    for (const key of ["input", "output", "cacheRead", "cacheWrite"] as const) {
+      if (cost[key] === undefined && preset.cost[key] !== undefined) {
+        cost[key] = preset.cost[key];
+        costChanged = true;
+        appliedCount += 1;
+      }
+    }
+    if (costChanged) next.cost = cost;
+  }
+  return { model: next, appliedCount };
+}
+
 function ModelDetail({
   providerName,
   provider,
@@ -701,10 +757,9 @@ function ModelDetail({
 }) {
   const [testState, setTestState] = useState<ModelTestState>({ phase: "idle" });
   const { t } = useI18n();
-  const [catalogQuery, setCatalogQuery] = useState(model.id);
   const [catalogState, setCatalogState] = useState<ModelCatalogState>({ phase: "idle" });
-  const [selectedCatalogKey, setSelectedCatalogKey] = useState("");
   const catalogRequestIdRef = useRef(0);
+  const catalogUndoRef = useRef<ModelEntry | null>(null);
   const set = <K extends keyof ModelEntry>(k: K, v: ModelEntry[K]) => onChange({ ...model, [k]: v });
   const costVal = (k: keyof NonNullable<ModelEntry["cost"]>) => model.cost?.[k] !== undefined ? String(model.cost[k]) : "";
   const setCost = (k: keyof NonNullable<ModelEntry["cost"]>, v: string) => {
@@ -730,10 +785,9 @@ function ModelDetail({
 
   useEffect(() => {
     catalogRequestIdRef.current += 1;
-    setCatalogQuery(model.id);
     setCatalogState({ phase: "idle" });
-    setSelectedCatalogKey("");
-  }, [providerName, model.id]);
+    catalogUndoRef.current = null;
+  }, [providerName, provider.baseUrl, model.id]);
 
   const handleTest = useCallback(async () => {
     if (!model.id.trim() || testState.phase === "testing") return;
@@ -771,50 +825,75 @@ function ModelDetail({
     }
   }, [model, provider, providerName, testState.phase]);
 
-  const handleCatalogSearch = useCallback(async () => {
-    const query = catalogQuery.trim();
+  const handleCatalogFill = useCallback(async () => {
+    const query = model.id.trim();
     if (!query || catalogState.phase === "loading") return;
     const requestId = ++catalogRequestIdRef.current;
     setCatalogState({ phase: "loading" });
-    setSelectedCatalogKey("");
     try {
       const params = new URLSearchParams({ q: query, provider: providerName, limit: "50" });
+      if (provider.baseUrl?.trim()) params.set("baseUrl", provider.baseUrl.trim());
       const res = await fetch(`/api/models-config/catalog?${params}`);
-      const data = await res.json() as { models?: ModelCatalogEntry[]; error?: string };
+      const data = await res.json() as { recommendation?: ModelCatalogRecommendation; error?: string };
       if (requestId !== catalogRequestIdRef.current) return;
-      if (!res.ok || data.error || !data.models) {
+      if (!res.ok || data.error || !data.recommendation) {
         setCatalogState({ phase: "error", message: data.error ?? `HTTP ${res.status}` });
         return;
       }
-      setCatalogState({ phase: "success", models: data.models });
-      setSelectedCatalogKey(data.models[0]?.key ?? "");
+      const filled = fillEmptyModelFields(model, data.recommendation.preset);
+      if (filled.appliedCount > 0) {
+        catalogUndoRef.current = model;
+        onChange(filled.model);
+      }
+      setCatalogState({
+        phase: "success",
+        recommendation: data.recommendation,
+        appliedCount: filled.appliedCount,
+      });
     } catch (error) {
       if (requestId !== catalogRequestIdRef.current) return;
       setCatalogState({ phase: "error", message: error instanceof Error ? error.message : String(error) });
     }
-  }, [catalogQuery, catalogState.phase, providerName]);
+  }, [catalogState.phase, model, onChange, provider.baseUrl, providerName]);
 
-  const handleCatalogQueryChange = (value: string) => {
-    catalogRequestIdRef.current += 1;
-    setCatalogQuery(value);
+  const undoCatalogFill = () => {
+    const previous = catalogUndoRef.current;
+    if (!previous) return;
+    catalogUndoRef.current = null;
+    onChange(previous);
     setCatalogState({ phase: "idle" });
-    setSelectedCatalogKey("");
   };
 
-  const applyCatalogPrice = () => {
-    if (catalogState.phase !== "success") return;
-    const preset = catalogState.models.find((entry) => entry.key === selectedCatalogKey);
-    if (!preset) return;
-    onChange({
-      ...model,
-      cost: {
-        input: preset.cost.input,
-        output: preset.cost.output,
-        cacheRead: preset.cost.cacheRead,
-        cacheWrite: preset.cost.cacheWrite,
-      },
-    });
-  };
+  const catalogResultSummary = (() => {
+    if (catalogState.phase !== "success") return null;
+    const { recommendation, appliedCount } = catalogState;
+    const applied = appliedCount > 0
+      ? t("models.catalogFilled", { count: appliedCount })
+      : t("models.catalogNoEmptyFields");
+    if (recommendation.price.status === "unreliable") {
+      const price = recommendation.price.reason === "no-exact-match"
+        ? t("models.catalogNoExactMatch")
+        : t("models.catalogPriceUnreliable");
+      return `${applied} · ${price}`;
+    }
+    const price = recommendation.price.method === "provider"
+      ? t("models.catalogPriceProvider", { provider: recommendation.price.providerName ?? recommendation.price.providerId ?? providerName })
+      : recommendation.price.method === "base-url"
+        ? t("models.catalogPriceBaseUrl", { provider: recommendation.price.providerName ?? recommendation.price.providerId ?? providerName })
+        : t("models.catalogPriceConsensus", {
+            support: recommendation.price.support,
+            total: recommendation.price.total,
+          });
+    return `${applied} · ${price}`;
+  })();
+  const catalogStatusText = catalogState.phase === "error"
+    ? catalogState.message
+    : catalogResultSummary;
+  const catalogStatusColor = catalogState.phase === "error"
+    ? "#ef4444"
+    : catalogState.phase === "success" && catalogState.recommendation.price.status === "unreliable"
+      ? "#d97706"
+      : "var(--text-dim)";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -883,6 +962,55 @@ function ModelDetail({
         <Field label="Name"><TextInput value={model.name ?? ""} onChange={(v) => set("name", v || undefined)} placeholder="Display name" /></Field>
       </div>
 
+      <div style={{ padding: "10px 0", borderTop: "1px solid var(--border)", borderBottom: "1px solid var(--border)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <button
+            onClick={() => void handleCatalogFill()}
+            disabled={!model.id.trim() || catalogState.phase === "loading"}
+            style={{
+              height: 28, padding: "0 10px", border: "1px solid var(--border)", borderRadius: 5,
+              background: "var(--bg-panel)",
+              color: !model.id.trim() || catalogState.phase === "loading" ? "var(--text-dim)" : "var(--text-muted)",
+              cursor: !model.id.trim() || catalogState.phase === "loading" ? "not-allowed" : "pointer",
+              fontSize: 11,
+            }}
+          >
+            {catalogState.phase === "loading" ? t("models.catalogFilling") : t("models.catalogFill")}
+          </button>
+          <a
+            href="https://github.com/anomalyco/models.dev"
+            target="_blank"
+            rel="noreferrer"
+            style={{ marginLeft: "auto", color: "var(--text-dim)", fontSize: 10, textDecoration: "none" }}
+          >
+            {t("models.catalogSource")}
+          </a>
+        </div>
+
+        <div
+          aria-live="polite"
+          style={{
+            marginTop: 6, height: 20, display: "flex", alignItems: "center",
+            justifyContent: "space-between", gap: 8, color: catalogStatusColor, fontSize: 10,
+          }}
+        >
+          <span
+            title={catalogStatusText ?? undefined}
+            style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+          >
+            {catalogStatusText}
+          </span>
+          {catalogUndoRef.current && (
+            <button
+              onClick={undoCatalogFill}
+              style={{ flexShrink: 0, padding: "0 2px", border: "none", background: "none", color: "var(--accent)", cursor: "pointer", fontSize: 10 }}
+            >
+              {t("models.catalogUndo")}
+            </button>
+          )}
+        </div>
+      </div>
+
       <Field label="API override">
         <Select value={model.api ?? ""} onChange={(v) => set("api", v || undefined)} options={API_OPTIONS} />
       </Field>
@@ -932,62 +1060,7 @@ function ModelDetail({
       </div>
 
       <div>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-          <SectionTitle>Cost (per million tokens)</SectionTitle>
-          <a href="https://github.com/anomalyco/models.dev" target="_blank" rel="noreferrer" style={{ color: "var(--text-dim)", fontSize: 10, textDecoration: "none" }}>{t("models.catalogSource")}</a>
-        </div>
-        <div style={{ marginTop: 8, display: "flex", gap: 6, alignItems: "center" }}>
-          <input
-            value={catalogQuery}
-            onChange={(event) => handleCatalogQueryChange(event.target.value)}
-            onKeyDown={(event) => { if (event.key === "Enter") void handleCatalogSearch(); }}
-            placeholder={t("models.catalogSearchPlaceholder")}
-            aria-label={t("models.catalogSearchLabel")}
-            style={{ ...inputStyle, flex: 1, minWidth: 0 }}
-          />
-          <button
-            onClick={handleCatalogSearch}
-            disabled={!catalogQuery.trim() || catalogState.phase === "loading"}
-            style={{ height: 28, padding: "0 10px", border: "1px solid var(--border)", borderRadius: 5, background: "var(--bg-panel)", color: !catalogQuery.trim() || catalogState.phase === "loading" ? "var(--text-dim)" : "var(--text-muted)", cursor: !catalogQuery.trim() || catalogState.phase === "loading" ? "not-allowed" : "pointer", fontSize: 11, whiteSpace: "nowrap" }}
-          >
-            {catalogState.phase === "loading" ? t("models.catalogSearching") : t("models.catalogFindPrice")}
-          </button>
-        </div>
-        {catalogState.phase === "error" && (
-          <div style={{ marginTop: 6, color: "#ef4444", fontSize: 10 }}>{catalogState.message}</div>
-        )}
-        {catalogState.phase === "success" && catalogState.models.length === 0 && (
-          <div style={{ marginTop: 6, color: "var(--text-dim)", fontSize: 10 }}>{t("models.catalogNoMatches")}</div>
-        )}
-        {catalogState.phase === "success" && catalogState.models.length > 0 && (
-          <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}>
-            <select
-              value={selectedCatalogKey}
-              onChange={(event) => setSelectedCatalogKey(event.target.value)}
-              aria-label={t("models.catalogPresetLabel")}
-              style={{ ...inputStyle, flex: 1, minWidth: 0 }}
-            >
-              {catalogState.models.map((entry) => (
-                <option key={entry.key} value={entry.key}>
-                  {t("models.catalogOption", {
-                    provider: entry.providerName,
-                    name: entry.name,
-                    input: entry.cost.input ?? "—",
-                    output: entry.cost.output ?? "—",
-                  })}
-                </option>
-              ))}
-            </select>
-            <button
-              onClick={applyCatalogPrice}
-              disabled={!selectedCatalogKey}
-              style={{ height: 28, padding: "0 10px", border: "none", borderRadius: 5, background: selectedCatalogKey ? "var(--accent)" : "var(--bg-panel)", color: selectedCatalogKey ? "#fff" : "var(--text-dim)", cursor: selectedCatalogKey ? "pointer" : "not-allowed", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}
-            >
-              {t("models.catalogApply")}
-            </button>
-          </div>
-        )}
-        <div style={{ marginTop: 5, color: "var(--text-dim)", fontSize: 10 }}>{t("models.catalogApplyHint")}</div>
+        <SectionTitle>Cost (per million tokens)</SectionTitle>
         <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
           {(["input", "output", "cacheRead", "cacheWrite"] as const).map((k) => (
             <Field key={k} label={k}>
