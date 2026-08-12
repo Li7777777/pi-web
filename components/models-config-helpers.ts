@@ -66,7 +66,10 @@ export function serializeHeaderRows(rows: readonly HeaderRow[]): Record<string, 
   const headers: Record<string, string> = {};
   for (const row of rows) {
     const name = row.name.trim();
-    if (name) headers[name] = row.value;
+    // A row with a name but no value is a placeholder draft — it must not be
+    // persisted, otherwise it would override the parent's same-named header
+    // with an empty value at runtime.
+    if (name && row.value.trim()) headers[name] = row.value;
   }
   return Object.keys(headers).length ? headers : undefined;
 }
